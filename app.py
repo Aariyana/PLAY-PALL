@@ -92,6 +92,122 @@ def admin_kb():
         [InlineKeyboardButton("⬅️ Back", callback_data="back_main")]
     ])
 
+# ================== Premium Management Commands ==================
+async def cmd_setpremium(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Set premium status for a user"""
+    user = update.effective_user
+    user_record = ensure_user_record(user)
+    
+    if not user_record["is_admin"]:
+        await update.message.reply_text("❌ Unauthorized. Admin access required.")
+        return
+        
+    if len(context.args) != 2:
+        await update.message.reply_text("Usage: /setpremium <user_id> <on/off>")
+        return
+        
+    try:
+        target_user_id = int(context.args[0])
+        status = context.args[1].lower()
+        
+        if status not in ["on", "off"]:
+            await update.message.reply_text("Usage: /setpremium <user_id> <on/off>")
+            return
+            
+        is_premium = (status == "on")
+        
+        # Update premium status
+        if target_user_id in _users:
+            _users[target_user_id]["is_premium"] = is_premium
+        else:
+            # Create a basic user record if it doesn't exist
+            _users[target_user_id] = {
+                "user_id": target_user_id,
+                "is_premium": is_premium,
+                "is_admin": False,
+                "messages": 0,
+                "xp": 0,
+            }
+        
+        # Try to notify the user
+        try:
+            status_text = "activated" if is_premium else "deactivated"
+            await context.bot.send_message(
+                chat_id=target_user_id,
+                text=f"🎉 Your premium status has been {status_text} by an admin!"
+            )
+        except Exception as e:
+            print(f"Could not notify user {target_user_id}: {e}")
+            
+        await update.message.reply_text(f"✅ Premium for user {target_user_id} set to {status}")
+        
+    except ValueError:
+        await update.message.reply_text("❌ Invalid user ID. Please provide a numeric user ID.")
+
+async def cmd_premiumusers(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """List all premium users"""
+    user = update.effective_user
+    user_record = ensure_user_record(user)
+    
+    if not user_record["is_admin"]:
+        await update.message.reply_text("❌ Unauthorized. Admin access required.")
+        return
+    
+    premium_users = [u for u in _users.values() if u.get("is_premium")]
+    
+    if not premium_users:
+        await update.message.reply_text("❌ No premium users found.")
+        return
+    
+    premium_list = "🌟 *Premium Users:*\n\n"
+    for i, user_data in enumerate(premium_users, 1):
+        username = f"@{user_data.get('username', 'N/A')}" if user_data.get('username') else "No username"
+        premium_list += f"{i}. {user_data.get('first_name', 'User')} ({username}) - ID: `{user_data['user_id']}`\n"
+    
+    await update.message.reply_text(premium_list, parse_mode=ParseMode.MARKDOWN)
+
+async def cmd_givepremium(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Give premium to a user by username"""
+    user = update.effective_user
+    user_record = ensure_user_record(user)
+    
+    if not user_record["is_admin"]:
+        await update.message.reply_text("❌ Unauthorized. Admin access required.")
+        return
+        
+    if not context.args:
+        await update.message.reply_text("Usage: /givepremium <username>")
+        return
+        
+    target_username = context.args[0].replace("@", "")  # Remove @ if present
+    
+    # Find user by username
+    target_user = None
+    for user_id, user_data in _users.items():
+        if user_data.get("username") == target_username:
+            target_user = user_data
+            break
+    
+    if not target_user:
+        await update.message.reply_text(f"❌ User @{target_username} not found in database.")
+        return
+    
+    # Give premium
+    target_user["is_premium"] = True
+    
+    # Try to notify the user
+    try:
+        await context.bot.send_message(
+            chat_id=target_user["user_id"],
+            text="🎉 You've been granted premium status by an admin! Enjoy the exclusive features!"
+        )
+    except Exception as e:
+        print(f"Could not notify user {target_user['user_id']}: {e}")
+    
+    await update.message.reply_text(
+        f"✅ Premium status granted to @{target_username} (ID: {target_user['user_id']})"
+    )
+
 
 # ================== Command Handlers ==================
 async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -139,6 +255,48 @@ async def cmd_admin(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
     
     await update.message.reply_text(admin_text, reply_markup=admin_kb(), parse_mode=ParseMode.MARKDOWN)
+
+async def cmd_userinfo(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Get detailed user information"""
+    user = update.effective_user
+    user_record = ensure_user_record(user)
+    
+    if not user_record["is_admin"]:
+        await update.message.reply_text("❌ Unauthorized. Admin access required.")
+        return
+        
+    if not context.args:
+        await update.message.reply_text("Usage: /userinfo <user_id>")
+        return
+        
+    try:
+        target_user_id = int(context.args[0])
+        
+        if target_user_id not in _users:
+            await update.message.reply_text("❌ User not found.")
+            return
+            
+        target_user = _users[target_user_id]
+        
+        user_info = (
+            f"👤 *User Information:*\n\n"
+            f"• User ID: `{target_user_id}`\n"
+            f"• Name: {target_user.get('first_name', 'N/A')}\n"
+            f"• Username: @{target_user.get('username', 'N/A')}\n"
+            f"• Admin: {'✅ Yes' if target_user.get('is_admin') else '❌ No'}\n"
+            f"• Premium: {'✅ Yes' if target_user.get('is_premium') else '❌ No'}\n"
+            f"• Messages: {target_user.get('messages', 0)}\n"
+            f"• XP: {target_user.get('xp', 0)}\n"
+            f"• Language: {target_user.get('language', 'en')}\n"
+            f"• Joined: {target_user.get('joined_at', 'N/A')}\n\n"
+            f"*Quick Actions:*\n"
+            f"/setpremium {target_user_id} {'off' if target_user.get('is_premium') else 'on'}\n"
+        )
+        
+        await update.message.reply_text(user_info, parse_mode=ParseMode.MARKDOWN)
+        
+    except ValueError:
+        await update.message.reply_text("❌ Invalid user ID. Please provide a numeric user ID.")
 
 async def cmd_broadcast(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Broadcast message to all users"""
@@ -224,6 +382,32 @@ async def cmd_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "Use `/stats <user_id>` for specific user info"
         )
         await update.message.reply_text(stats_text, parse_mode=ParseMode.MARKDOWN)
+
+def check_premium(user_id: int) -> bool:
+    """Check if user has premium access"""
+    if user_id in _users:
+        return _users[user_id].get("is_premium", False)
+    return False
+
+# Example usage in your meme command:
+async def cmd_meme(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Send a random meme (Premium feature)"""
+    user = update.effective_user
+    user_record = ensure_user_record(user)
+    
+    if not check_premium(user.id):
+        await update.message.reply_text(
+            "🔒 This is a premium feature!\n\n"
+            "Upgrade to premium to access exclusive memes, GIFs, and more!\n"
+            "Contact @admin for premium access.",
+            reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton("📞 Contact Admin", callback_data="contact_admin")]
+            ])
+        )
+        return
+        
+    # Premium user logic here
+    await update.message.reply_text("Here's your premium meme! 🎉")
 
 async def cmd_contact(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Contact admin command"""
@@ -399,6 +583,9 @@ def main():
     application.add_handler(CommandHandler("joke", cmd_joke))
     application.add_handler(CallbackQueryHandler(button_handler))
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, message_handler))
+    application.add_handler(CommandHandler("setpremium", cmd_setpremium))
+    application.add_handler(CommandHandler("premiumusers", cmd_premiumusers))
+    application.add_handler(CommandHandler("givepremium", cmd_givepremium))
     application.add_error_handler(error_handler)
 
     print("🤖 Starting PlayPal bot...")
