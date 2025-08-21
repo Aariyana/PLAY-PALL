@@ -1,6 +1,6 @@
 # app.py
-# PlayPal v2 - Ultimate Viral Telegram Bot
-# Features: Games, Viral Content, Premium Features, AI Chat, and more!
+# PlayPal v2 - Ultimate Viral Telegram Bot with Group & Channel Integration
+# Features: Games, Viral Content, Premium Features, AI Chat, Referrals, and more!
 
 import os
 import random
@@ -35,8 +35,8 @@ from telegram.ext import (
 # ================== Configuration ==================
 BOT_TOKEN = os.getenv("BOT_TOKEN", "").strip()
 ADMIN_IDS = [int(x.strip()) for x in os.getenv("ADMIN_IDS", "7896947963").split(",") if x.strip().isdigit()]
-CHANNEL_LINK = os.getenv("CHANNEL_LINK", "https://t.me/PlayPalu")
-GROUP_LINK = os.getenv("GROUP_LINK", "https://t.me/+1mgUwZpfuJY0YjA1")
+CHANNEL_LINK = "https://t.me/PlayPalu"  # Your channel link
+GROUP_LINK = "https://t.me/playpalg"    # Your group link
 NEWS_API = os.getenv("NEWS_API", "")
 GIPHY_API = os.getenv("GIPHY_API", "")
 
@@ -78,6 +78,10 @@ def ensure_user_record(user):
             "last_seen": datetime.now(timezone.utc),
             "games_played": 0,
             "referrals": 0,
+            "referral_code": f"ref_{user.id}",
+            "referred_by": None,
+            "has_joined_channel": False,
+            "has_joined_group": False,
         }
     _users[user.id]["last_seen"] = datetime.now(timezone.utc)
     return _users[user.id]
@@ -171,6 +175,17 @@ class ContentSystem:
             }
         ]
         return random.choice(questions)
+    
+    async def get_surprise_content(self):
+        """Get random surprise content"""
+        surprises = [
+            {"type": "fact", "content": await self.get_daily_fact()},
+            {"type": "quote", "content": await self.get_motivational_quote()},
+            {"type": "meme", "content": await self.get_viral_meme()},
+            {"type": "joke", "content": "Why don't scientists trust atoms? Because they make up everything!"},
+            {"type": "tip", "content": "💡 Pro Tip: Play games daily to earn more coins and level up faster!"},
+        ]
+        return random.choice(surprises)
 
 content_system = ContentSystem()
 
@@ -241,10 +256,298 @@ def fun_menu_kb():
         ["⬅️ Back"]
     ], resize_keyboard=True)
 
+def social_menu_kb():
+    return ReplyKeyboardMarkup([
+        ["📢 Join Channel", "👥 Join Group"],
+        ["🎉 Share Bot", "⬅️ Back"]
+    ], resize_keyboard=True)
+
+# ================== QUIZ ANSWER HANDLER ==================
+async def handle_quiz_answer(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle quiz answers from users"""
+    user = update.effective_user
+    user_record = ensure_user_record(user)
+    
+    user_message = update.message.text.strip()
+    chat_id = update.effective_chat.id
+    game_id = f"{chat_id}_{user.id}"
+    
+    # Check if there's an active quiz for this user
+    if game_id not in _active_games or _active_games[game_id]["type"] != "quiz":
+        # No active quiz, treat as normal message
+        await handle_message(update, context)
+        return
+    
+    quiz_data = _active_games[game_id]
+    question = quiz_data["question"]
+    
+    try:
+        # Try to parse answer as number (1, 2, 3, 4)
+        if user_message.isdigit():
+            answer_index = int(user_message) - 1
+            if 0 <= answer_index < len(question["options"]):
+                is_correct = (answer_index == question["answer"])
+                
+                # Award coins and XP
+                if is_correct:
+                    coins_won = quiz_data["reward"]
+                    user_record["coins"] += coins_won
+                    xp_earned = 20
+                    add_xp(user.id, xp_earned)
+                    
+                    response = (
+                        f"✅ *Correct!* 🎉\n\n"
+                        f"You won {coins_won} coins!\n"
+                        f"+{xp_earned} XP\n\n"
+                        f"💰 Total coins: {user_record['coins']}\n"
+                        f"⭐ Total XP: {user_record['xp']}"
+                    )
+                else:
+                    correct_answer = question["options"][question["answer"]]
+                    response = (
+                        f"❌ *Incorrect!*\n\n"
+                        f"The correct answer was: {correct_answer}\n\n"
+                        f"Better luck next time! 💪"
+                    )
+                
+                # Remove the active quiz
+                del _active_games[game_id]
+                user_record["games_played"] += 1
+                
+                await update.message.reply_text(response, parse_mode=ParseMode.MARKDOWN)
+                return
+                
+        # Try to match answer by text
+        user_answer_lower = user_message.lower()
+        correct_answer_lower = question["options"][question["answer"]].lower()
+        
+        if user_answer_lower == correct_answer_lower:
+            # Correct answer by text
+            coins_won = quiz_data["reward"]
+            user_record["coins"] += coins_won
+            xp_earned = 20
+            add_xp(user.id, xp_earned)
+            
+            response = (
+                f"✅ *Correct!* 🎉\n\n"
+                f"You won {coins_won} coins!\n"
+                f"+{xp_earned} XP\n\n"
+                f"💰 Total coins: {user_record['coins']}\n"
+                f"⭐ Total XP: {user_record['xp']}"
+            )
+            
+            del _active_games[game_id]
+            user_record["games_played"] += 1
+            
+            await update.message.reply_text(response, parse_mode=ParseMode.MARKDOWN)
+            return
+            
+        else:
+            # Check if answer is in options (case insensitive)
+            for i, option in enumerate(question["options"]):
+                if user_answer_lower == option.lower():
+                    is_correct = (i == question["answer"])
+                    
+                    if is_correct:
+                        coins_won = quiz_data["reward"]
+                        user_record["coins"] += coins_won
+                        xp_earned = 20
+                        add_xp(user.id, xp_earned)
+                        
+                        response = (
+                            f"✅ *Correct!* 🎉\n\n"
+                            f"You won {coins_won} coins!\n"
+                            f"+{xp_earned} XP\n\n"
+                            f"💰 Total coins: {user_record['coins']}\n"
+                            f"⭐ Total XP: {user_record['xp']}"
+                        )
+                    else:
+                        correct_answer = question["options"][question["answer"]]
+                        response = (
+                            f"❌ *Incorrect!*\n\n"
+                            f"The correct answer was: {correct_answer}\n\n"
+                            f"Better luck next time! 💪"
+                        )
+                    
+                    del _active_games[game_id]
+                    user_record["games_played"] += 1
+                    
+                    await update.message.reply_text(response, parse_mode=ParseMode.MARKDOWN)
+                    return
+    
+    except Exception as e:
+        print(f"Error handling quiz answer: {e}")
+    
+    # If we get here, the answer wasn't valid
+    options = "\n".join([f"{i+1}. {opt}" for i, opt in enumerate(question['options'])])
+    
+    await update.message.reply_text(
+        f"Please reply with a valid answer number (1-{len(question['options'])})\n\n"
+        f"❓ {question['question']}\n\n"
+        f"{options}",
+        parse_mode=ParseMode.MARKDOWN
+    )
+
+
+# ================== REFERRAL SYSTEM ==================
+async def cmd_refer(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Generate referral link and show referral info"""
+    user = update.effective_user
+    user_record = ensure_user_record(user)
+    
+    bot_username = (await context.bot.get_me()).username
+    referral_link = f"https://t.me/{bot_username}?start={user_record['referral_code']}"
+    
+    referral_text = (
+        f"📤 *Referral Program*\n\n"
+        f"Invite friends and earn rewards!\n\n"
+        f"🔗 Your referral link:\n"
+        f"`{referral_link}`\n\n"
+        f"📊 Stats:\n"
+        f"• Referrals: {user_record['referrals']}\n"
+        f"• Reward: 50 coins per referral\n\n"
+        f"Share your link with friends. When they join using your link, "
+        f"you'll both get 50 coins! 🎉"
+    )
+    
+    await update.message.reply_text(referral_text, parse_mode=ParseMode.MARKDOWN)
+
+async def handle_referral_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle referral links when users start the bot"""
+    user = update.effective_user
+    user_record = ensure_user_record(user)
+    
+    # Check if user came from referral
+    if context.args and context.args[0].startswith('ref_'):
+        try:
+            referrer_id = int(context.args[0].split('_')[1])
+            
+            # Check if referrer exists and it's not self-referral
+            if referrer_id in _users and referrer_id != user.id and user_record["referred_by"] is None:
+                # Award referrer
+                _users[referrer_id]["coins"] += 50
+                _users[referrer_id]["referrals"] += 1
+                
+                # Award new user
+                user_record["coins"] += 50
+                user_record["referred_by"] = referrer_id
+                
+                # Notify referrer
+                try:
+                    await context.bot.send_message(
+                        chat_id=referrer_id,
+                        text=f"🎉 *New referral!* {user.first_name} joined using your link!\n"
+                             f"You received 50 coins! 🪙",
+                        parse_mode=ParseMode.MARKDOWN
+                    )
+                except:
+                    pass
+                
+                return True
+        except:
+            pass
+    
+    return False
+
+# ================== SURPRISE FEATURE ==================
+async def cmd_surprise(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Send random surprise content"""
+    user = update.effective_user
+    user_record = ensure_user_record(user)
+    
+    surprise = await content_system.get_surprise_content()
+    
+    if surprise["type"] == "fact":
+        await update.message.reply_text(f"🎁 *Surprise Fact!* 📚\n\n{surprise['content']}", parse_mode=ParseMode.MARKDOWN)
+    elif surprise["type"] == "quote":
+        await update.message.reply_text(f"🎁 *Surprise Quote!* 💫\n\n{surprise['content']}", parse_mode=ParseMode.MARKDOWN)
+    elif surprise["type"] == "meme":
+        await update.message.reply_photo(
+            photo=surprise['content']['url'],
+            caption=f"🎁 *Surprise Meme!* 😂\n\n{surprise['content']['title']}",
+            parse_mode=ParseMode.MARKDOWN
+        )
+    elif surprise["type"] == "joke":
+        await update.message.reply_text(f"🎁 *Surprise Joke!* 😂\n\n{surprise['content']}", parse_mode=ParseMode.MARKDOWN)
+    elif surprise["type"] == "tip":
+        await update.message.reply_text(f"🎁 *Surprise Tip!* 💡\n\n{surprise['content']}", parse_mode=ParseMode.MARKDOWN)
+
+# ================== GROUP & CHANNEL INTEGRATION ==================
+async def cmd_community(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Show community links"""
+    community_text = (
+        "🌟 *Join Our Community!* 🌟\n\n"
+        f"📢 *Official Channel:* {CHANNEL_LINK}\n"
+        "• Get latest updates\n"
+        "• Exclusive content\n"
+        "• Bot news and announcements\n\n"
+        f"👥 *Community Group:* {GROUP_LINK}\n"
+        "• Chat with other users\n"
+        "• Get help and support\n"
+        "• Share your experiences\n\n"
+        "Join both to stay connected! 🤝"
+    )
+    
+    await update.message.reply_text(community_text, parse_mode=ParseMode.MARKDOWN, reply_markup=social_menu_kb())
+
+async def cmd_channel(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Promote the channel"""
+    channel_text = (
+        f"📢 *Join Our Official Channel!* 📢\n\n"
+        f"Stay updated with the latest features, news, and exclusive content!\n\n"
+        f"🔗 {CHANNEL_LINK}\n\n"
+        "What you'll get:\n"
+        "• Bot updates and new features\n"
+        "• Exclusive tips and tricks\n"
+        "• Daily content and surprises\n"
+        "• Early access to new games\n\n"
+        "See you there! 👋"
+    )
+    
+    await update.message.reply_text(channel_text, parse_mode=ParseMode.MARKDOWN)
+
+async def cmd_group(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Promote the group"""
+    group_text = (
+        f"👥 *Join Our Community Group!* 👥\n\n"
+        f"Connect with other users, get help, and share your experiences!\n\n"
+        f"🔗 {GROUP_LINK}\n\n"
+        "Why join our group:\n"
+        "• Get instant help and support\n"
+        "• Share your high scores\n"
+        "• Make new friends\n"
+        "• Participate in events\n"
+        "• Suggest new features\n\n"
+        "We're waiting for you! 🎉"
+    )
+    
+    await update.message.reply_text(group_text, parse_mode=ParseMode.MARKDOWN)
+
+async def cmd_share(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Share bot with friends"""
+    user = update.effective_user
+    user_record = ensure_user_record(user)
+    
+    bot_username = (await context.bot.get_me()).username
+    share_text = (
+        f"🎉 *Share PlayPal Bot with Friends!* 🎉\n\n"
+        f"Invite your friends to join the fun! Here's your personal invite message:\n\n"
+        f"Hey! Check out this amazing Telegram bot 🤖\n"
+        f"Play games, get daily memes, earn coins, and have fun!\n\n"
+        f"🔗 https://t.me/{bot_username}\n\n"
+        f"Use my referral code for bonus coins: {user_record['referral_code']}\n\n"
+        "Share with your friends and both of you will get rewards! 🎁"
+    )
+    
+    await update.message.reply_text(share_text, parse_mode=ParseMode.MARKDOWN)
+
 # ================== VIRAL COMMAND HANDLERS ==================
 async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     user_record = ensure_user_record(user)
+    
+    # Handle referral first
+    referral_bonus = await handle_referral_start(update, context)
     
     welcome_gift = 50
     user_record["coins"] += welcome_gift
@@ -256,14 +559,24 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = (
         f"🎉 *Welcome, {name}!*{admin_status}{premium_status}\n\n"
         f"I'm 🤖 *PlayPal* — your ultimate entertainment bot!\n\n"
-        f"✨ *You received {welcome_gift} coins as a welcome gift!*\n\n"
+        f"✨ *You received {welcome_gift} coins as a welcome gift!*\n"
+    )
+    
+    if referral_bonus:
+        text += f"✨ *Bonus: 50 coins for using referral link!*\n\n"
+    
+    text += (
         "🚀 *Features:*\n"
         "• 🎮 Games (Quiz, Slots, Dice)\n"
         "• 😂 Viral Memes & Content\n"
         "• 💰 Coin Economy System\n"
         "• 📊 Level Progression\n"
         "• 🤖 AI Chat\n"
-        "• 🎁 Daily Rewards\n\n"
+        "• 🎁 Daily Rewards\n"
+        "• 📤 Referral Program\n\n"
+        f"📢 *Join our community:*\n"
+        f"Channel: {CHANNEL_LINK}\n"
+        f"Group: {GROUP_LINK}\n\n"
     )
     
     if user_record["is_admin"]:
@@ -287,11 +600,20 @@ async def cmd_help(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "😂 *Fun Commands:*\n"
         "• /fact - Interesting daily fact\n"
         "• /quote - Motivational quote\n"
-        "• /meme - Get a viral meme\n\n"
+        "• /meme - Get a viral meme\n"
+        "• /surprise - Random surprise content\n\n"
         "📊 *Profile:*\n"
         "• /profile - View your stats\n"
         "• /coins - Check your balance\n"
-        "• /leaderboard - Top players\n\n"
+        "• /refer - Get referral link\n\n"
+        "👥 *Community:*\n"
+        "• /community - Join channel & group\n"
+        "• /channel - Our official channel\n"
+        "• /group - Our community group\n"
+        "• /share - Share bot with friends\n\n"
+        "📞 *Support:*\n"
+        "• @admin - Mention in any message\n"
+        "• /contact - Send message to admins\n\n"
     )
     
     user = update.effective_user
@@ -306,7 +628,7 @@ async def cmd_help(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "• /setpremium - Manage premium status\n\n"
         )
     
-    help_text += "Use the keyboard menu for easy navigation! 🎯"
+   help_text += "Use the keyboard menu for easy navigation! 🎯"
     
     await update.message.reply_text(help_text, parse_mode=ParseMode.MARKDOWN)
 
@@ -330,148 +652,114 @@ async def cmd_profile(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if user_record["is_admin"]:
         profile_text += "👑 *Bot Admin*\n\n"
     
-    profile_text += f"Joined: {user_record['joined_at'].strftime('%Y-%m-%d')}"
+    profile_text += f"Joined: {user_record['joined_at'].strftime('%Y-%m-%d')}\n\n"
+    profile_text += f"🔗 *Community Links:*\nChannel: {CHANNEL_LINK}\nGroup: {GROUP_LINK}"
     
     await update.message.reply_text(profile_text, parse_mode=ParseMode.MARKDOWN)
 
-async def cmd_quiz(update: Update, context: ContextTypes.DEFAULT_TYPE):
+# ================== CONTACT ADMIN SYSTEM ==================
+async def cmd_contact(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle contact admin requests"""
     user = update.effective_user
     user_record = ensure_user_record(user)
     
-    question = await game_system.start_quiz(user.id, update.effective_chat.id)
+    message = " ".join(context.args) if context.args else "I would like to get help"
     
-    options = "\n".join([f"{i+1}. {opt}" for i, opt in enumerate(question['options'])])
-    
-    quiz_text = (
-        f"🎯 *Quiz Time!* ({question['difficulty']})\n\n"
-        f"❓ {question['question']}\n\n"
-        f"{options}\n\n"
-        "Reply with the number of your answer!"
+    contact_text = (
+        f"📩 *Contact Request*\n\n"
+        f"• From: {user.first_name} (@{user.username or 'No username'})\n"
+        f"• User ID: `{user.id}`\n"
+        f"• Message: {message}\n\n"
+        f"Time: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
     )
     
-    await update.message.reply_text(quiz_text, parse_mode=ParseMode.MARKDOWN)
+    # Send to all admins
+    sent_count = 0
+    for admin_id in ADMIN_IDS:
+        try:
+            await context.bot.send_message(
+                chat_id=admin_id,
+                text=contact_text,
+                parse_mode=ParseMode.MARKDOWN
+            )
+            sent_count += 1
+            # Avoid rate limiting
+            await asyncio.sleep(0.1)
+        except Exception as e:
+            print(f"Failed to send to admin {admin_id}: {e}")
+    
+    if sent_count > 0:
+        response = (
+            "✅ *Message sent to admins!*\n\n"
+            "Our team will contact you shortly. "
+            "You can also join our support group for faster help:\n"
+            f"{GROUP_LINK}"
+        )
+    else:
+        response = (
+            "❌ *Could not reach admins*\n\n"
+            "Please try again later or join our support group:\n"
+            f"{GROUP_LINK}"
+        )
+    
+    await update.message.reply_text(response, parse_mode=ParseMode.MARKDOWN)
 
-async def cmd_slots(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def handle_admin_mention(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle @admin mentions in messages"""
     user = update.effective_user
     user_record = ensure_user_record(user)
     
-    if not context.args:
-        await update.message.reply_text(
-            "🎰 *Slot Machine*\n\n"
-            "Usage: /slots <bet amount>\n"
-            "Example: /slots 10\n\n"
-            f"Your coins: {user_record['coins']}",
-            parse_mode=ParseMode.MARKDOWN
-        )
-        return
+    user_message = update.message.text
     
-    try:
-        bet_amount = int(context.args[0])
-        if bet_amount < 5:
-            await update.message.reply_text("Minimum bet is 5 coins!")
-            return
-        if bet_amount > user_record["coins"]:
-            await update.message.reply_text("Not enough coins!")
-            return
-            
-        result, win_amount = await game_system.start_slot_machine(user.id, bet_amount)
+    # Check if message contains @admin
+    if "@admin" in user_message.lower():
+        contact_text = (
+            f"📩 *Admin Mention*\n\n"
+            f"• From: {user.first_name} (@{user.username or 'No username'})\n"
+            f"• User ID: `{user.id}`\n"
+            f"• Message: {user_message}\n\n"
+            f"Time: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
+        )
         
-        slot_display = " | ".join(result)
+        # Send to all admins
+        sent_count = 0
+        for admin_id in ADMIN_IDS:
+            try:
+                await context.bot.send_message(
+                    chat_id=admin_id,
+                    text=contact_text,
+                    parse_mode=ParseMode.MARKDOWN
+                )
+                sent_count += 1
+                # Avoid rate limiting
+                await asyncio.sleep(0.1)
+            except Exception as e:
+                print(f"Failed to send to admin {admin_id}: {e}")
         
-        if win_amount > 0:
-            result_text = (
-                f"🎰 *JACKPOT!* 🎰\n\n"
-                f"{slot_display}\n\n"
-                f"💰 You won {win_amount} coins!\n"
-                f"🎯 New balance: {user_record['coins']}"
+        if sent_count > 0:
+            response = (
+                "👋 *Hi! I see you mentioned @admin*\n\n"
+                "Your message has been forwarded to our admin team. "
+                "They'll contact you soon!\n\n"
+                "For faster support, you can:\n"
+                f"• Use /contact <message>\n"
+                f"• Join our group: {GROUP_LINK}\n"
+                f"• Check /help for common questions"
             )
         else:
-            result_text = (
-                f"🎰 Slot Machine\n\n"
-                f"{slot_display}\n\n"
-                f"😢 No win this time!\n"
-                f"🎯 Balance: {user_record['coins']}"
+            response = (
+                "👋 *Hi! I see you mentioned @admin*\n\n"
+                "Sorry, we couldn't reach our admin team right now. "
+                "Please try:\n"
+                f"• Using /contact <message>\n"
+                f"• Joining our group: {GROUP_LINK}\n"
+                f"• Checking /help for quick answers"
             )
-
-        await update.message.reply_text(result_text, parse_mode=ParseMode.MARKDOWN)
         
-    except ValueError:
-        await update.message.reply_text("Please enter a valid number!")
-
-async def cmd_fact(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    fact = await content_system.get_daily_fact()
-    await update.message.reply_text(f"📚 *Did You Know?*\n\n{fact}", parse_mode=ParseMode.MARKDOWN)
-
-async def cmd_quote(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    quote = await content_system.get_motivational_quote()
-    await update.message.reply_text(f"💫 *Motivational Quote*\n\n{quote}", parse_mode=ParseMode.MARKDOWN)
-
-async def cmd_meme(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    meme = await content_system.get_viral_meme()
-    await update.message.reply_photo(
-        photo=meme['url'],
-        caption=f"😂 *Viral Meme*\n\n{meme['title']}\nSource: {meme['source']}",
-        parse_mode=ParseMode.MARKDOWN
-    )
-
-async def cmd_coins(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user = update.effective_user
-    user_record = ensure_user_record(user)
+        await update.message.reply_text(response, parse_mode=ParseMode.MARKDOWN)
+        return True
     
-    await update.message.reply_text(
-        f"💰 *Coin Balance*\n\n"
-        f"You have: {user_record['coins']} coins\n\n"
-        f"Earn more by playing games and leveling up! 🎮",
-        parse_mode=ParseMode.MARKDOWN
-    )
-
-# ================== ADMIN COMMANDS ==================
-async def cmd_admin(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user = update.effective_user
-    user_record = ensure_user_record(user)
-    
-    if not user_record["is_admin"]:
-        await update.message.reply_text("❌ Unauthorized. Admin access required.")
-        return
-    
-    admin_text = (
-        "👑 *Admin Panel*\n\n"
-        f"• Total users: {len(_users)}\n"
-        f"• Online users: {len([u for u in _users.values() if (datetime.now(timezone.utc) - u['last_seen']).total_seconds() < 300])}\n"
-        f"• Premium users: {len([u for u in _users.values() if u.get('is_premium')])}\n\n"
-        "*Commands:*\n"
-        "/stats - Detailed statistics\n"
-        "/broadcast - Message all users\n"
-        "/setpremium - Manage premium status\n"
-        "/userinfo - Get user details"
-    )
-    
-    await update.message.reply_text(admin_text, parse_mode=ParseMode.MARKDOWN)
-
-async def cmd_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user = update.effective_user
-    user_record = ensure_user_record(user)
-    
-    if not user_record["is_admin"]:
-        await update.message.reply_text("❌ Unauthorized. Admin access required.")
-        return
-        
-    total_coins = sum(u.get('coins', 0) for u in _users.values())
-    total_xp = sum(u.get('xp', 0) for u in _users.values())
-    total_games = sum(u.get('games_played', 0) for u in _users.values())
-    
-    stats_text = (
-        "📊 *Bot Statistics*\n\n"
-        f"• Total Users: {len(_users)}\n"
-        f"• Total Coins: {total_coins}\n"
-        f"• Total XP: {total_xp}\n"
-        f"• Games Played: {total_games}\n"
-        f"• Premium Users: {len([u for u in _users.values() if u.get('is_premium')])}\n"
-        f"• Admin Users: {len([u for u in _users.values() if u.get('is_admin')])}\n\n"
-        "Use /userinfo <id> for user details"
-    )
-    
-    await update.message.reply_text(stats_text, parse_mode=ParseMode.MARKDOWN)
+    return False
 
 # ================== MESSAGE HANDLERS ==================
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -482,8 +770,26 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         
         # Add XP for messaging
         leveled_up, new_level = add_xp(user.id, 1)
+        if leveled_up:
+            await update.message.reply_text(
+                f"🎉 *Level Up!* 🎉\n\n"
+                f"You reached level {new_level}!\n"
+                f"+{new_level * 10} coins reward!",
+                parse_mode=ParseMode.MARKDOWN
+            )
         
         user_message = update.message.text
+        chat_id = update.effective_chat.id
+        game_id = f"{chat_id}_{user.id}"
+        
+        # Check if user has an active quiz first
+        if game_id in _active_games and _active_games[game_id]["type"] == "quiz":
+            await handle_quiz_answer(update, context)
+            return
+        
+        # Check for @admin mention
+        if await handle_admin_mention(update, context):
+            return
         
         # Handle menu options
         if user_message == "🎮 Games":
@@ -500,7 +806,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 "• Daily bonus coins\n"
                 "• Ad-free experience\n"
                 "• Priority support\n\n"
-                "Contact @admin for premium access!",
+                "Contact admins using /contact or mention @admin",
                 parse_mode=ParseMode.MARKDOWN
             )
         elif user_message == "🤖 AI Chat":
@@ -510,16 +816,17 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 "• How are you?\n"
                 "• Tell me a joke\n"
                 "• What can you do?\n"
-                "• Play a game with me",
+                "• Play a game with me\n\n"
+                "Need admin help? Mention @admin",
                 parse_mode=ParseMode.MARKDOWN
             )
         elif user_message == "📞 Support":
             await update.message.reply_text(
                 "📞 *Support*\n\n"
-                "Need help? Contact our support team:\n"
-                "• Email: support@playpal.com\n"
-                "• Telegram: @admin\n"
-                "• Group: https://t.me/PlayPalGroup\n\n"
+                "Need help? Here's how to reach us:\n"
+                "• Mention @admin in any message\n"
+                "• Use /contact <your message>\n"
+                "• Join our group: {GROUP_LINK}\n\n"
                 "We're here to help! 💖",
                 parse_mode=ParseMode.MARKDOWN
             )
@@ -533,6 +840,14 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await cmd_quote(update, context)
         elif user_message == "😂 Meme":
             await cmd_meme(update, context)
+        elif user_message == "🎁 Surprise":
+            await cmd_surprise(update, context)
+        elif user_message == "📢 Join Channel":
+            await cmd_channel(update, context)
+        elif user_message == "👥 Join Group":
+            await cmd_group(update, context)
+        elif user_message == "🎉 Share Bot":
+            await cmd_share(update, context)
         elif user_message == "⬅️ Back":
             await update.message.reply_text("Back to main menu:", reply_markup=main_menu_kb())
         else:
@@ -547,8 +862,22 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 await update.message.reply_text("Why don't scientists trust atoms? Because they make up everything! 😂")
             elif any(word in user_message.lower() for word in ["what can you do", "features"]):
                 await cmd_help(update, context)
+            elif any(word in user_message.lower() for word in ["admin", "help", "support"]):
+                await update.message.reply_text(
+                    "Need admin help? You can:\n"
+                    "• Mention @admin in any message\n"
+                    "• Use /contact <your message>\n"
+                    "• Join our group: {GROUP_LINK}",
+                    parse_mode=ParseMode.MARKDOWN
+                )
+            elif any(word in user_message.lower() for word in ["channel", "group", "community"]):
+                await cmd_community(update, context)
             else:
-                await update.message.reply_text("I'm here to chat and play games with you! Use the menu below to get started. 👇", reply_markup=main_menu_kb())
+                await update.message.reply_text(
+                    "I'm here to chat and play games with you! "
+                    "Need admin help? Mention @admin 👇", 
+                    reply_markup=main_menu_kb()
+                )
 
 async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE):
     print(f"Error: {context.error}")
@@ -561,10 +890,37 @@ async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE):
     except:
         pass
 
+# ================== CLEANUP TASKS ==================
+async def cleanup_old_quizzes():
+    """Clean up quizzes that are older than 10 minutes"""
+    while True:
+        try:
+            current_time = datetime.now()
+            expired_quizzes = []
+            
+            for game_id, game_data in _active_games.items():
+                if game_data["type"] == "quiz":
+                    time_diff = (current_time - game_data["start_time"]).total_seconds()
+                    if time_diff > 600:  # 10 minutes
+                        expired_quizzes.append(game_id)
+            
+            for game_id in expired_quizzes:
+                del _active_games[game_id]
+                print(f"Cleaned up expired quiz: {game_id}")
+                
+            await asyncio.sleep(300)  # Check every 5 minutes
+            
+        except Exception as e:
+            print(f"Error in quiz cleanup: {e}")
+            await asyncio.sleep(60)
+
 # ================== BOT SETUP ==================
 def main():
     # Create the Application
     application = ApplicationBuilder().token(BOT_TOKEN).build()
+
+    # Start quiz cleanup task
+    asyncio.create_task(cleanup_old_quizzes())
 
     # Add handlers
     application.add_handler(CommandHandler("start", cmd_start))
@@ -575,17 +931,26 @@ def main():
     application.add_handler(CommandHandler("fact", cmd_fact))
     application.add_handler(CommandHandler("quote", cmd_quote))
     application.add_handler(CommandHandler("meme", cmd_meme))
+    application.add_handler(CommandHandler("surprise", cmd_surprise))
     application.add_handler(CommandHandler("coins", cmd_coins))
+    application.add_handler(CommandHandler("refer", cmd_refer))
+    application.add_handler(CommandHandler("contact", cmd_contact))
     application.add_handler(CommandHandler("admin", cmd_admin))
     application.add_handler(CommandHandler("stats", cmd_stats))
+    application.add_handler(CommandHandler("community", cmd_community))
+    application.add_handler(CommandHandler("channel", cmd_channel))
+    application.add_handler(CommandHandler("group", cmd_group))
+    application.add_handler(CommandHandler("share", cmd_share))
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
     application.add_error_handler(error_handler)
 
     print("🤖 Starting PlayPal Ultimate Bot...")
     print(f"✅ Admin IDs: {ADMIN_IDS}")
+    print(f"📢 Channel: {CHANNEL_LINK}")
+    print(f"👥 Group: {GROUP_LINK}")
     print("🎮 Games: Quiz, Slots, Dice")
-    print("😂 Content: Memes, Facts, Quotes")
-    print("💰 Economy: Coins, XP, Levels")
+    print("😂 Content: Memes, Facts, Quotes, Surprises")
+    print("💰 Economy: Coins, XP, Levels, Referrals")
     print("✅ Bot is ready and waiting for messages...")
     
     # Start polling
