@@ -61,22 +61,60 @@ bans_col = None
 
 if use_mongo:
     try:
-        client = MongoClient(MONGODB_URI, serverSelectionTimeoutMS=10000)
-        client.admin.command("ping")
+        # Parse the MongoDB URI to handle special characters
+        from urllib.parse import quote_plus
+        
+        # Create a properly encoded connection string
+        if "@" in MONGODB_URI:
+            # URI already has credentials, use as-is
+            client = MongoClient(MONGODB_URI, serverSelectionTimeoutMS=10000)
+        else:
+            # Handle Railway's MongoDB connection string format
+            # Extract username and password from environment variables if needed
+            username = os.getenv("MONGODB_USER", "")
+            password = os.getenv("MONGODB_PASSWORD", "")
+            
+            if username and password:
+                # Construct the connection string with encoded credentials
+                from urllib.parse import urlparse
+                parsed = urlparse(MONGODB_URI)
+                encoded_username = quote_plus(username)
+                encoded_password = quote_plus(password)
+                auth_uri = f"mongodb://{encoded_username}:{encoded_password}@{parsed.hostname}:{parsed.port}/{parsed.path.lstrip('/')}"
+                client = MongoClient(auth_uri, serverSelectionTimeoutMS=10000)
+            else:
+                client = MongoClient(MONGODB_URI, serverSelectionTimeoutMS=10000)
+        
+        # Test the connection with a simple command
+        client.admin.command('ping')
+        
+        # Get database name from URI or use default
         try:
-            db_name = MONGODB_URI.split("/")[-1].split("?")[0] or "playpal"
+            if "@" in MONGODB_URI:
+                # Extract DB name from connection string
+                db_name = MONGODB_URI.split("/")[-1].split("?")[0]
+                if not db_name:
+                    db_name = "playpal"
+            else:
+                db_name = "playpal"
         except Exception:
             db_name = "playpal"
+            
         db = client[db_name]
         users_col = db["users"]
         cache_col = db["cache"]
         bans_col = db["bans"]
+        
+        # Create indexes
         users_col.create_index([("user_id", ASCENDING)], unique=True)
         users_col.create_index([("messages", DESCENDING)])
         cache_col.create_index([("type", ASCENDING)])
-        print("Connected to MongoDB.")
-    except ServerSelectionTimeoutError:
-        print("WARNING: Cannot connect to MongoDB. Falling back to in-memory store.")
+        
+        print("Connected to MongoDB successfully.")
+        
+    except Exception as e:
+        print(f"WARNING: MongoDB connection failed: {e}")
+        print("Falling back to in-memory store.")
         use_mongo = False
 else:
     print("No MONGODB_URI set — using in-memory store (non-persistent).")
