@@ -1,20 +1,26 @@
 # app.py
-# PlayPal v2 - Secure Version with Admin System
+# PlayPal v2 - Ultimate Viral Telegram Bot
+# Features: Games, Viral Content, Premium Features, AI Chat, and more!
 
 import os
 import random
 import threading
 import time
 import traceback
+import aiohttp
+import asyncio
 from datetime import datetime, timezone
-from typing import Optional, List
-
+from typing import Optional, List, Dict
+import json
 import requests
+
 from flask import Flask
 from telegram import (
     Update,
     InlineKeyboardMarkup,
     InlineKeyboardButton,
+    ReplyKeyboardMarkup,
+    ReplyKeyboardRemove
 )
 from telegram.constants import ParseMode
 from telegram.ext import (
@@ -28,36 +34,32 @@ from telegram.ext import (
 
 # ================== Configuration ==================
 BOT_TOKEN = os.getenv("BOT_TOKEN", "").strip()
-MONGODB_URI = os.getenv("MONGODB_URI", "").strip()
-ADMIN_IDS = [int(x.strip()) for x in os.getenv("ADMIN_IDS", "").split(",") if x.strip().isdigit()]
+ADMIN_IDS = [int(x.strip()) for x in os.getenv("ADMIN_IDS", "7896947963").split(",") if x.strip().isdigit()]
 CHANNEL_LINK = os.getenv("CHANNEL_LINK", "https://t.me/PlayPalu")
 GROUP_LINK = os.getenv("GROUP_LINK", "https://t.me/+1mgUwZpfuJY0YjA1")
-BOT_OWNER_AUTO_PREMIUM = os.getenv("BOT_OWNER_AUTO_PREMIUM", "").strip()
-NEWS_API = os.getenv("NEWS_API", "").strip()
-GIFY_API = os.getenv("GIFY_API", "").strip()
+NEWS_API = os.getenv("NEWS_API", "")
+GIPHY_API = os.getenv("GIPHY_API", "")
 
 if not BOT_TOKEN:
     raise RuntimeError("BOT_TOKEN environment variable is required.")
 
-print(f"Admin IDs configured: {ADMIN_IDS}")
+print(f"🤖 Bot starting with Admin IDs: {ADMIN_IDS}")
 
 # ================== Flask keep-alive ==================
 app = Flask(__name__)
 
 @app.route("/")
 def home():
-    return "✅ PlayPal v2 Bot is running with secure admin system!"
+    return "✅ PlayPal Ultimate Bot is running!"
 
 # ================== Admin System ==================
 def is_admin(user_id: int) -> bool:
-    """Check if user is an admin"""
-    print(f"Checking admin status for user {user_id}. Admin IDs: {ADMIN_IDS}")
     return user_id in ADMIN_IDS
 
 # ================== In-memory storage ==================
 _users = {}
-_active_quizzes = {}
-_leaderboard = {}
+_active_games = {}
+_user_sessions = {}
 
 def ensure_user_record(user):
     if user.id not in _users:
@@ -69,173 +71,362 @@ def ensure_user_record(user):
             "is_admin": is_admin(user.id),
             "messages": 0,
             "xp": 0,
+            "coins": 100,  # Starting coins
+            "level": 1,
             "language": "en",
             "joined_at": datetime.now(timezone.utc),
             "last_seen": datetime.now(timezone.utc),
+            "games_played": 0,
+            "referrals": 0,
         }
-        print(f"New user registered: {user.id} (Admin: {is_admin(user.id)})")
+    _users[user.id]["last_seen"] = datetime.now(timezone.utc)
     return _users[user.id]
 
-# ================== UI Helpers ==================
-def main_menu_kb():
-    return InlineKeyboardMarkup([
-        [InlineKeyboardButton("🆘 Help", callback_data="help_menu")],
-        [InlineKeyboardButton("🎮 Games", callback_data="games_menu")],
-        [InlineKeyboardButton("😂 Get Joke", callback_data="get_joke")],
-        [InlineKeyboardButton("📞 Contact Admin", callback_data="contact_admin")]
-    ])
+def add_xp(user_id, amount):
+    if user_id in _users:
+        _users[user_id]["xp"] += amount
+        # Check level up (100 XP per level)
+        new_level = _users[user_id]["xp"] // 100 + 1
+        if new_level > _users[user_id]["level"]:
+            _users[user_id]["level"] = new_level
+            _users[user_id]["coins"] += new_level * 10  # Reward for leveling up
+            return True, new_level
+    return False, 0
 
-def admin_kb():
-    return InlineKeyboardMarkup([
-        [InlineKeyboardButton("📊 Stats", callback_data="admin_stats")],
-        [InlineKeyboardButton("📢 Broadcast", callback_data="admin_broadcast")],
-        [InlineKeyboardButton("⬅️ Back", callback_data="back_main")]
-    ])
+def add_coins(user_id, amount):
+    if user_id in _users:
+        _users[user_id]["coins"] += amount
+        return True
+    return False
 
-# ================== Premium Management Commands ==================
-async def cmd_setpremium(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Set premium status for a user"""
-    user = update.effective_user
-    user_record = ensure_user_record(user)
+# ================== VIRAL CONTENT SYSTEMS ==================
+class ContentSystem:
+    def __init__(self):
+        self.session = None
+        
+    async def ensure_session(self):
+        if self.session is None:
+            self.session = aiohttp.ClientSession()
+        
+    async def get_daily_fact(self):
+        facts = [
+            "Honey never spoils. Archaeologists have found pots of honey in ancient Egyptian tombs that are over 3,000 years old and still perfectly edible!",
+            "Octopuses have three hearts and blue blood!",
+            "A group of flamingos is called a 'flamboyance'!",
+            "The shortest war in history was between Britain and Zanzibar in 1896. Zanzibar surrendered after 38 minutes!",
+            "Bananas are berries, but strawberries aren't!",
+        ]
+        return random.choice(facts)
     
-    if not user_record["is_admin"]:
-        await update.message.reply_text("❌ Unauthorized. Admin access required.")
-        return
-        
-    if len(context.args) != 2:
-        await update.message.reply_text("Usage: /setpremium <user_id> <on/off>")
-        return
-        
-    try:
-        target_user_id = int(context.args[0])
-        status = context.args[1].lower()
-        
-        if status not in ["on", "off"]:
-            await update.message.reply_text("Usage: /setpremium <user_id> <on/off>")
-            return
-            
-        is_premium = (status == "on")
-        
-        # Update premium status
-        if target_user_id in _users:
-            _users[target_user_id]["is_premium"] = is_premium
-        else:
-            # Create a basic user record if it doesn't exist
-            _users[target_user_id] = {
-                "user_id": target_user_id,
-                "is_premium": is_premium,
-                "is_admin": False,
-                "messages": 0,
-                "xp": 0,
-            }
-        
-        # Try to notify the user
+    async def get_motivational_quote(self):
+        quotes = [
+            "The only way to do great work is to love what you do. - Steve Jobs",
+            "Believe you can and you're halfway there. - Theodore Roosevelt",
+            "Your time is limited, don't waste it living someone else's life. - Steve Jobs",
+            "It always seems impossible until it's done. - Nelson Mandela",
+            "Success is not final, failure is not fatal: It is the courage to continue that counts. - Winston Churchill",
+        ]
+        return random.choice(quotes)
+    
+    async def get_viral_meme(self):
         try:
-            status_text = "activated" if is_premium else "deactivated"
-            await context.bot.send_message(
-                chat_id=target_user_id,
-                text=f"🎉 Your premium status has been {status_text} by an admin!"
-            )
-        except Exception as e:
-            print(f"Could not notify user {target_user_id}: {e}")
-            
-        await update.message.reply_text(f"✅ Premium for user {target_user_id} set to {status}")
+            await self.ensure_session()
+            async with self.session.get('https://meme-api.com/gimme') as response:
+                data = await response.json()
+                if not data['nsfw']:
+                    return {
+                        'url': data['url'],
+                        'title': data['title'],
+                        'source': f"r/{data['subreddit']}"
+                    }
+        except:
+            pass
         
-    except ValueError:
-        await update.message.reply_text("❌ Invalid user ID. Please provide a numeric user ID.")
+        # Fallback memes
+        memes = [
+            {'url': 'https://i.imgflip.com/1bij.jpg', 'title': 'One Does Not Simply', 'source': 'Classic Meme'},
+            {'url': 'https://i.imgflip.com/261o3j.jpg', 'title': 'But that\'s none of my business', 'source': 'Kermit'},
+        ]
+        return random.choice(memes)
+    
+    async def get_trivia_question(self):
+        questions = [
+            {
+                "question": "What is the largest planet in our solar system?",
+                "options": ["Earth", "Jupiter", "Saturn", "Mars"],
+                "answer": 1,
+                "difficulty": "easy"
+            },
+            {
+                "question": "Which element has the chemical symbol 'Au'?",
+                "options": ["Silver", "Gold", "Argon", "Aluminum"],
+                "answer": 1,
+                "difficulty": "medium"
+            },
+            {
+                "question": "What is the capital of Australia?",
+                "options": ["Sydney", "Melbourne", "Canberra", "Perth"],
+                "answer": 2,
+                "difficulty": "medium"
+            }
+        ]
+        return random.choice(questions)
 
-async def cmd_premiumusers(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """List all premium users"""
-    user = update.effective_user
-    user_record = ensure_user_record(user)
-    
-    if not user_record["is_admin"]:
-        await update.message.reply_text("❌ Unauthorized. Admin access required.")
-        return
-    
-    premium_users = [u for u in _users.values() if u.get("is_premium")]
-    
-    if not premium_users:
-        await update.message.reply_text("❌ No premium users found.")
-        return
-    
-    premium_list = "🌟 *Premium Users:*\n\n"
-    for i, user_data in enumerate(premium_users, 1):
-        username = f"@{user_data.get('username', 'N/A')}" if user_data.get('username') else "No username"
-        premium_list += f"{i}. {user_data.get('first_name', 'User')} ({username}) - ID: `{user_data['user_id']}`\n"
-    
-    await update.message.reply_text(premium_list, parse_mode=ParseMode.MARKDOWN)
+content_system = ContentSystem()
 
-async def cmd_givepremium(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Give premium to a user by username"""
-    user = update.effective_user
-    user_record = ensure_user_record(user)
-    
-    if not user_record["is_admin"]:
-        await update.message.reply_text("❌ Unauthorized. Admin access required.")
-        return
+# ================== GAME SYSTEMS ==================
+class GameSystem:
+    async def start_quiz(self, user_id, chat_id):
+        question = await content_system.get_trivia_question()
+        game_id = f"{chat_id}_{user_id}"
         
-    if not context.args:
-        await update.message.reply_text("Usage: /givepremium <username>")
-        return
+        _active_games[game_id] = {
+            "type": "quiz",
+            "question": question,
+            "start_time": datetime.now(),
+            "reward": random.randint(15, 25)
+        }
         
-    target_username = context.args[0].replace("@", "")  # Remove @ if present
+        return question
     
-    # Find user by username
-    target_user = None
-    for user_id, user_data in _users.items():
-        if user_data.get("username") == target_username:
-            target_user = user_data
-            break
-    
-    if not target_user:
-        await update.message.reply_text(f"❌ User @{target_username} not found in database.")
-        return
-    
-    # Give premium
-    target_user["is_premium"] = True
-    
-    # Try to notify the user
-    try:
-        await context.bot.send_message(
-            chat_id=target_user["user_id"],
-            text="🎉 You've been granted premium status by an admin! Enjoy the exclusive features!"
-        )
-    except Exception as e:
-        print(f"Could not notify user {target_user['user_id']}: {e}")
-    
-    await update.message.reply_text(
-        f"✅ Premium status granted to @{target_username} (ID: {target_user['user_id']})"
-    )
+    async def start_slot_machine(self, user_id, bet_amount):
+        user = _users.get(user_id)
+        if not user or user["coins"] < bet_amount:
+            return None, "Not enough coins!"
+        
+        # Deduct bet
+        user["coins"] -= bet_amount
+        
+        # Generate slot result
+        symbols = ["🍒", "🍋", "🍊", "🍇", "🔔", "💎", "7️⃣"]
+        result = [random.choice(symbols) for _ in range(3)]
+        
+        # Calculate win
+        win_multiplier = 0
+        if result[0] == result[1] == result[2]:
+            if result[0] == "💎": win_multiplier = 10
+            elif result[0] == "7️⃣": win_multiplier = 5
+            else: win_multiplier = 3
+        elif result[0] == result[1] or result[1] == result[2]:
+            win_multiplier = 1.5
+        
+        win_amount = int(bet_amount * win_multiplier) if win_multiplier > 0 else 0
+        
+        if win_amount > 0:
+            user["coins"] += win_amount
+        
+        return result, win_amount
 
+game_system = GameSystem()
 
-# ================== Command Handlers ==================
+# ================== UI HELPERS ==================
+def main_menu_kb():
+    return ReplyKeyboardMarkup([
+        ["🎮 Games", "😂 Fun"],
+        ["📊 Profile", "⭐ Premium"],
+        ["🤖 AI Chat", "📞 Support"]
+    ], resize_keyboard=True)
+
+def games_menu_kb():
+    return ReplyKeyboardMarkup([
+        ["🎯 Quiz", "🎰 Slots"],
+        ["🎲 Dice", "🤔 Trivia"],
+        ["⬅️ Back"]
+    ], resize_keyboard=True)
+
+def fun_menu_kb():
+    return ReplyKeyboardMarkup([
+        ["📰 Daily Fact", "💬 Quote"],
+        ["😂 Meme", "🎁 Surprise"],
+        ["⬅️ Back"]
+    ], resize_keyboard=True)
+
+# ================== VIRAL COMMAND HANDLERS ==================
 async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     user_record = ensure_user_record(user)
     
+    welcome_gift = 50
+    user_record["coins"] += welcome_gift
+    
     name = user.first_name or "friend"
-    admin_status = " (Admin)" if user_record["is_admin"] else ""
+    admin_status = " 👑" if user_record["is_admin"] else ""
+    premium_status = " ⭐" if user_record["is_premium"] else ""
     
     text = (
-        f"👋 *Welcome, {name}!*{admin_status}\n\n"
-        "I'm 🤖 *PlayPal* — your fun Telegram bot!\n\n"
-        "✨ I can:\n"
-        "• Tell you jokes 😄\n"
-        "• Play games 🎮\n"
-        "• Share news 📰\n"
-        "• Chat with you 💬\n\n"
+        f"🎉 *Welcome, {name}!*{admin_status}{premium_status}\n\n"
+        f"I'm 🤖 *PlayPal* — your ultimate entertainment bot!\n\n"
+        f"✨ *You received {welcome_gift} coins as a welcome gift!*\n\n"
+        "🚀 *Features:*\n"
+        "• 🎮 Games (Quiz, Slots, Dice)\n"
+        "• 😂 Viral Memes & Content\n"
+        "• 💰 Coin Economy System\n"
+        "• 📊 Level Progression\n"
+        "• 🤖 AI Chat\n"
+        "• 🎁 Daily Rewards\n\n"
     )
     
     if user_record["is_admin"]:
-        text += "⚙️ *Admin commands available:* /admin\n\n"
+        text += "⚙️ *Admin commands:* /admin\n\n"
     
-    text += "Use the menu below to get started!"
+    text += "Use the menu below to explore! 👇"
     
-    await update.message.reply_text(text, reply_markup=main_menu_kb(), parse_mode=ParseMode.MARKDOWN)
+    await update.message.reply_text(
+        text, 
+        reply_markup=main_menu_kb(), 
+        parse_mode=ParseMode.MARKDOWN
+    )
 
+async def cmd_help(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    help_text = (
+        "🤖 *PlayPal Ultimate Bot Help*\n\n"
+        "🎮 *Games:*\n"
+        "• /quiz - Trivia quiz game\n"
+        "• /slots - Slot machine game\n"
+        "• /dice - Roll dice for rewards\n\n"
+        "😂 *Fun Commands:*\n"
+        "• /fact - Interesting daily fact\n"
+        "• /quote - Motivational quote\n"
+        "• /meme - Get a viral meme\n\n"
+        "📊 *Profile:*\n"
+        "• /profile - View your stats\n"
+        "• /coins - Check your balance\n"
+        "• /leaderboard - Top players\n\n"
+    )
+    
+    user = update.effective_user
+    user_record = ensure_user_record(user)
+    
+    if user_record["is_admin"]:
+        help_text += (
+            "👑 *Admin Commands:*\n"
+            "• /admin - Admin panel\n"
+            "• /stats - User statistics\n"
+            "• /broadcast - Message all users\n"
+            "• /setpremium - Manage premium status\n\n"
+        )
+    
+    help_text += "Use the keyboard menu for easy navigation! 🎯"
+    
+    await update.message.reply_text(help_text, parse_mode=ParseMode.MARKDOWN)
+
+async def cmd_profile(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user = update.effective_user
+    user_record = ensure_user_record(user)
+    
+    profile_text = (
+        f"👤 *{user.first_name}'s Profile*\n\n"
+        f"⭐ Level: {user_record['level']}\n"
+        f"📊 XP: {user_record['xp']}/100\n"
+        f"💰 Coins: {user_record['coins']}\n"
+        f"🎮 Games Played: {user_record['games_played']}\n"
+        f"💬 Messages: {user_record['messages']}\n"
+        f"👥 Referrals: {user_record['referrals']}\n\n"
+    )
+    
+    if user_record["is_premium"]:
+        profile_text += "⭐ *Premium Member*\n\n"
+    
+    if user_record["is_admin"]:
+        profile_text += "👑 *Bot Admin*\n\n"
+    
+    profile_text += f"Joined: {user_record['joined_at'].strftime('%Y-%m-%d')}"
+    
+    await update.message.reply_text(profile_text, parse_mode=ParseMode.MARKDOWN)
+
+async def cmd_quiz(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user = update.effective_user
+    user_record = ensure_user_record(user)
+    
+    question = await game_system.start_quiz(user.id, update.effective_chat.id)
+    
+    options = "\n".join([f"{i+1}. {opt}" for i, opt in enumerate(question['options'])])
+    
+    quiz_text = (
+        f"🎯 *Quiz Time!* ({question['difficulty']})\n\n"
+        f"❓ {question['question']}\n\n"
+        f"{options}\n\n"
+        "Reply with the number of your answer!"
+    )
+    
+    await update.message.reply_text(quiz_text, parse_mode=ParseMode.MARKDOWN)
+
+async def cmd_slots(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user = update.effective_user
+    user_record = ensure_user_record(user)
+    
+    if not context.args:
+        await update.message.reply_text(
+            "🎰 *Slot Machine*\n\n"
+            "Usage: /slots <bet amount>\n"
+            "Example: /slots 10\n\n"
+            f"Your coins: {user_record['coins']}",
+            parse_mode=ParseMode.MARKDOWN
+        )
+        return
+    
+    try:
+        bet_amount = int(context.args[0])
+        if bet_amount < 5:
+            await update.message.reply_text("Minimum bet is 5 coins!")
+            return
+        if bet_amount > user_record["coins"]:
+            await update.message.reply_text("Not enough coins!")
+            return
+            
+        result, win_amount = await game_system.start_slot_machine(user.id, bet_amount)
+        
+        slot_display = " | ".join(result)
+        
+        if win_amount > 0:
+            result_text = (
+                f"🎰 *JACKPOT!* 🎰\n\n"
+                f"{slot_display}\n\n"
+                f"💰 You won {win_amount} coins!\n"
+                f"🎯 New balance: {user_record['coins']}"
+            )
+        else:
+            result_text = (
+                f"🎰 Slot Machine\n\n"
+                f"{slot_display}\n\n"
+                f"😢 No win this time!\n"
+                f"🎯 Balance: {user_record['coins']}"
+            )
+
+        await update.message.reply_text(result_text, parse_mode=ParseMode.MARKDOWN)
+        
+    except ValueError:
+        await update.message.reply_text("Please enter a valid number!")
+
+async def cmd_fact(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    fact = await content_system.get_daily_fact()
+    await update.message.reply_text(f"📚 *Did You Know?*\n\n{fact}", parse_mode=ParseMode.MARKDOWN)
+
+async def cmd_quote(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    quote = await content_system.get_motivational_quote()
+    await update.message.reply_text(f"💫 *Motivational Quote*\n\n{quote}", parse_mode=ParseMode.MARKDOWN)
+
+async def cmd_meme(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    meme = await content_system.get_viral_meme()
+    await update.message.reply_photo(
+        photo=meme['url'],
+        caption=f"😂 *Viral Meme*\n\n{meme['title']}\nSource: {meme['source']}",
+        parse_mode=ParseMode.MARKDOWN
+    )
+
+async def cmd_coins(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user = update.effective_user
+    user_record = ensure_user_record(user)
+    
+    await update.message.reply_text(
+        f"💰 *Coin Balance*\n\n"
+        f"You have: {user_record['coins']} coins\n\n"
+        f"Earn more by playing games and leveling up! 🎮",
+        parse_mode=ParseMode.MARKDOWN
+    )
+
+# ================== ADMIN COMMANDS ==================
 async def cmd_admin(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Admin panel command"""
     user = update.effective_user
     user_record = ensure_user_record(user)
     
@@ -244,101 +435,20 @@ async def cmd_admin(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     
     admin_text = (
-        "🛠️ *Admin Panel*\n\n"
-        f"• Total users: `{len(_users)}`\n"
-        f"• Admin users: `{len([u for u in _users.values() if u.get('is_admin')])}`\n"
-        f"• Premium users: `{len([u for u in _users.values() if u.get('is_premium')])}`\n\n"
-        "*Admin Commands:*\n"
-        "/stats - View user statistics\n"
-        "/broadcast - Broadcast message to all users\n"
-        "/userinfo <id> - Get user information"
+        "👑 *Admin Panel*\n\n"
+        f"• Total users: {len(_users)}\n"
+        f"• Online users: {len([u for u in _users.values() if (datetime.now(timezone.utc) - u['last_seen']).total_seconds() < 300])}\n"
+        f"• Premium users: {len([u for u in _users.values() if u.get('is_premium')])}\n\n"
+        "*Commands:*\n"
+        "/stats - Detailed statistics\n"
+        "/broadcast - Message all users\n"
+        "/setpremium - Manage premium status\n"
+        "/userinfo - Get user details"
     )
     
-    await update.message.reply_text(admin_text, reply_markup=admin_kb(), parse_mode=ParseMode.MARKDOWN)
-
-async def cmd_userinfo(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Get detailed user information"""
-    user = update.effective_user
-    user_record = ensure_user_record(user)
-    
-    if not user_record["is_admin"]:
-        await update.message.reply_text("❌ Unauthorized. Admin access required.")
-        return
-        
-    if not context.args:
-        await update.message.reply_text("Usage: /userinfo <user_id>")
-        return
-        
-    try:
-        target_user_id = int(context.args[0])
-        
-        if target_user_id not in _users:
-            await update.message.reply_text("❌ User not found.")
-            return
-            
-        target_user = _users[target_user_id]
-        
-        user_info = (
-            f"👤 *User Information:*\n\n"
-            f"• User ID: `{target_user_id}`\n"
-            f"• Name: {target_user.get('first_name', 'N/A')}\n"
-            f"• Username: @{target_user.get('username', 'N/A')}\n"
-            f"• Admin: {'✅ Yes' if target_user.get('is_admin') else '❌ No'}\n"
-            f"• Premium: {'✅ Yes' if target_user.get('is_premium') else '❌ No'}\n"
-            f"• Messages: {target_user.get('messages', 0)}\n"
-            f"• XP: {target_user.get('xp', 0)}\n"
-            f"• Language: {target_user.get('language', 'en')}\n"
-            f"• Joined: {target_user.get('joined_at', 'N/A')}\n\n"
-            f"*Quick Actions:*\n"
-            f"/setpremium {target_user_id} {'off' if target_user.get('is_premium') else 'on'}\n"
-        )
-        
-        await update.message.reply_text(user_info, parse_mode=ParseMode.MARKDOWN)
-        
-    except ValueError:
-        await update.message.reply_text("❌ Invalid user ID. Please provide a numeric user ID.")
-
-async def cmd_broadcast(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Broadcast message to all users"""
-    user = update.effective_user
-    user_record = ensure_user_record(user)
-    
-    if not user_record["is_admin"]:
-        await update.message.reply_text("❌ Unauthorized. Admin access required.")
-        return
-        
-    if not context.args:
-        await update.message.reply_text("Usage: /broadcast <message>")
-        return
-        
-    message = " ".join(context.args)
-    broadcast_text = f"📢 *Broadcast from Admin:*\n\n{message}"
-    
-    sent_count = 0
-    failed_count = 0
-    
-    for user_id, user_data in _users.items():
-        try:
-            await context.bot.send_message(
-                chat_id=user_id,
-                text=broadcast_text,
-                parse_mode=ParseMode.MARKDOWN
-            )
-            sent_count += 1
-            # Avoid rate limiting
-            await asyncio.sleep(0.1)
-        except Exception as e:
-            print(f"Failed to send to {user_id}: {e}")
-            failed_count += 1
-    
-    await update.message.reply_text(
-        f"📊 Broadcast completed:\n"
-        f"• Sent: {sent_count}\n"
-        f"• Failed: {failed_count}"
-    )
+    await update.message.reply_text(admin_text, parse_mode=ParseMode.MARKDOWN)
 
 async def cmd_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Get user statistics"""
     user = update.effective_user
     user_record = ensure_user_record(user)
     
@@ -346,228 +456,112 @@ async def cmd_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("❌ Unauthorized. Admin access required.")
         return
         
-    if context.args:
-        # Get specific user stats
-        try:
-            user_id = int(context.args[0])
-            if user_id in _users:
-                user_data = _users[user_id]
-                stats_text = (
-                    f"📊 *User Statistics for {user_id}*\n\n"
-                    f"• Username: @{user_data.get('username', 'N/A')}\n"
-                    f"• Name: {user_data.get('first_name', 'N/A')}\n"
-                    f"• Admin: {'✅ Yes' if user_data.get('is_admin') else '❌ No'}\n"
-                    f"• Premium: {'✅ Yes' if user_data.get('is_premium') else '❌ No'}\n"
-                    f"• Messages: {user_data.get('messages', 0)}\n"
-                    f"• XP: {user_data.get('xp', 0)}\n"
-                    f"• Joined: {user_data.get('joined_at', 'N/A')}"
-                )
-                await update.message.reply_text(stats_text, parse_mode=ParseMode.MARKDOWN)
-            else:
-                await update.message.reply_text("❌ User not found.")
-        except ValueError:
-            await update.message.reply_text("❌ Invalid user ID.")
-    else:
-        # Get overall stats
-        total_messages = sum(user.get('messages', 0) for user in _users.values())
-        total_xp = sum(user.get('xp', 0) for user in _users.values())
-        
-        stats_text = (
-            "📊 *Bot Statistics*\n\n"
-            f"• Total users: `{len(_users)}`\n"
-            f"• Admin users: `{len([u for u in _users.values() if u.get('is_admin')])}`\n"
-            f"• Premium users: `{len([u for u in _users.values() if u.get('is_premium')])}`\n"
-            f"• Total messages: `{total_messages}`\n"
-            f"• Total XP: `{total_xp}`\n\n"
-            "Use `/stats <user_id>` for specific user info"
-        )
-        await update.message.reply_text(stats_text, parse_mode=ParseMode.MARKDOWN)
-
-def check_premium(user_id: int) -> bool:
-    """Check if user has premium access"""
-    if user_id in _users:
-        return _users[user_id].get("is_premium", False)
-    return False
-
-# Example usage in your meme command:
-async def cmd_meme(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Send a random meme (Premium feature)"""
-    user = update.effective_user
-    user_record = ensure_user_record(user)
+    total_coins = sum(u.get('coins', 0) for u in _users.values())
+    total_xp = sum(u.get('xp', 0) for u in _users.values())
+    total_games = sum(u.get('games_played', 0) for u in _users.values())
     
-    if not check_premium(user.id):
-        await update.message.reply_text(
-            "🔒 This is a premium feature!\n\n"
-            "Upgrade to premium to access exclusive memes, GIFs, and more!\n"
-            "Contact @admin for premium access.",
-            reply_markup=InlineKeyboardMarkup([
-                [InlineKeyboardButton("📞 Contact Admin", callback_data="contact_admin")]
-            ])
-        )
-        return
-        
-    # Premium user logic here
-    await update.message.reply_text("Here's your premium meme! 🎉")
-
-async def cmd_contact(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Contact admin command"""
-    if not context.args:
-        await update.message.reply_text(
-            "Please provide a message for the admin.\n\n"
-            "Usage: /contact <your message>"
-        )
-        return
-        
-    user = update.effective_user
-    message = " ".join(context.args)
-    
-    contact_text = (
-        f"📩 *New Contact Message*\n\n"
-        f"• From: {user.first_name} (@{user.username})\n"
-        f"• User ID: `{user.id}`\n"
-        f"• Message: {message}"
+    stats_text = (
+        "📊 *Bot Statistics*\n\n"
+        f"• Total Users: {len(_users)}\n"
+        f"• Total Coins: {total_coins}\n"
+        f"• Total XP: {total_xp}\n"
+        f"• Games Played: {total_games}\n"
+        f"• Premium Users: {len([u for u in _users.values() if u.get('is_premium')])}\n"
+        f"• Admin Users: {len([u for u in _users.values() if u.get('is_admin')])}\n\n"
+        "Use /userinfo <id> for user details"
     )
     
-    # Send to all admins
-    sent_count = 0
-    for admin_id in ADMIN_IDS:
-        try:
-            await context.bot.send_message(
-                chat_id=admin_id,
-                text=contact_text,
-                parse_mode=ParseMode.MARKDOWN
-            )
-            sent_count += 1
-        except Exception as e:
-            print(f"Failed to send to admin {admin_id}: {e}")
-    
-    if sent_count > 0:
-        await update.message.reply_text(
-            "✅ Your message has been sent to the admin team. "
-            "They will get back to you soon!"
-        )
-    else:
-        await update.message.reply_text(
-            "❌ Sorry, we couldn't reach any admins at the moment. "
-            "Please try again later."
-        )
+    await update.message.reply_text(stats_text, parse_mode=ParseMode.MARKDOWN)
 
-async def cmd_id(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Get user ID"""
-    user = update.effective_user
-    user_record = ensure_user_record(user)
-    
-    admin_status = "✅ Admin" if user_record["is_admin"] else "❌ Not Admin"
-    
-    await update.message.reply_text(
-        f"👤 *Your User Info:*\n\n"
-        f"• User ID: `{user.id}`\n"
-        f"• Name: {user.first_name}\n"
-        f"• Username: @{user.username or 'N/A'}\n"
-        f"• Status: {admin_status}\n\n"
-        "Give your ID to the bot owner if you need admin access.",
-        parse_mode=ParseMode.MARKDOWN
-    )
-
-async def cmd_joke(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    jokes = [
-        "Why don't scientists trust atoms? Because they make up everything!",
-        "Why did the scarecrow win an award? Because he was outstanding in his field!",
-        "I told my computer I needed a break. It said, 'No problem, I'll go to sleep.'",
-        "Why don't eggs tell jokes? They'd crack each other up!",
-        "What do you call a fake noodle? An impasta!",
-    ]
-    joke = random.choice(jokes)
-    await update.message.reply_text(f"😂 {joke}")
-
-async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    await query.answer()
-    
-    user = query.from_user
-    user_record = ensure_user_record(user)
-    
-    if query.data == "help_menu":
-        await cmd_help(update, context)
-    elif query.data == "games_menu":
-        await query.edit_message_text(
-            "🎮 Available Games:\n\n"
-            "• /joke - Get a random joke\n"
-            "• More games coming soon! 🚀"
-        )
-    elif query.data == "get_joke":
-        await cmd_joke(update, context)
-    elif query.data == "contact_admin":
-        await query.edit_message_text(
-            "To contact admin:\n\n"
-            "1. Use /contact <your message>\n"
-            "2. Or join our group: https://t.me/PlayPalGroup\n\n"
-            "We'll help you with any questions!"
-        )
-    elif query.data == "admin_stats" and user_record["is_admin"]:
-        await cmd_stats(update, context)
-    elif query.data == "admin_broadcast" and user_record["is_admin"]:
-        await query.edit_message_text("Use /broadcast <message> to send a message to all users")
-    elif query.data == "back_main":
-        await query.edit_message_text("Back to main menu", reply_markup=main_menu_kb())
-    else:
-        await query.edit_message_text("I'm not sure what you want to do. Try /help for options.")
-
-async def cmd_help(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    help_text = (
-        "🤖 *PlayPal Bot Commands* 🤖\n\n"
-        "*/start* - Start the bot\n"
-        "*/help* - Show this help\n"
-        "*/joke* - Get a random joke\n"
-        "*/id* - Get your user ID\n"
-        "*/contact* - Contact admin\n\n"
-    )
-    
-    user = update.effective_user
-    user_record = ensure_user_record(user)
-    
-    if user_record["is_admin"]:
-        help_text += (
-            "⚙️ *Admin Commands:*\n"
-            "*/admin* - Admin panel\n"
-            "*/stats* - User statistics\n"
-            "*/broadcast* - Broadcast message\n\n"
-        )
-    
-    help_text += "Try me out! I'm here to have fun with you! 🎉"
-    
-    await update.message.reply_text(help_text, parse_mode=ParseMode.MARKDOWN)
-
-async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+# ================== MESSAGE HANDLERS ==================
+async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.message and update.message.text:
         user = update.effective_user
         user_record = ensure_user_record(user)
         user_record["messages"] += 1
-        user_record["xp"] += random.randint(1, 3)
         
-        user_message = update.message.text.lower()
+        # Add XP for messaging
+        leveled_up, new_level = add_xp(user.id, 1)
         
-        if any(word in user_message for word in ["hello", "hi", "hey"]):
-            await update.message.reply_text(f"👋 Hello {user.first_name}! How can I help you today?")
-        elif any(word in user_message for word in ["how are you", "how you doing"]):
-            await update.message.reply_text("I'm doing great! Ready to have some fun! 🎉")
-        elif any(word in user_message for word in ["thank", "thanks"]):
-            await update.message.reply_text("You're welcome! 😊")
+        user_message = update.message.text
+        
+        # Handle menu options
+        if user_message == "🎮 Games":
+            await update.message.reply_text("🎮 Choose a game:", reply_markup=games_menu_kb())
+        elif user_message == "😂 Fun":
+            await update.message.reply_text("😂 Choose fun content:", reply_markup=fun_menu_kb())
+        elif user_message == "📊 Profile":
+            await cmd_profile(update, context)
+        elif user_message == "⭐ Premium":
+            await update.message.reply_text(
+                "⭐ *Premium Features*\n\n"
+                "Coming soon! Premium members will get:\n"
+                "• Exclusive games\n"
+                "• Daily bonus coins\n"
+                "• Ad-free experience\n"
+                "• Priority support\n\n"
+                "Contact @admin for premium access!",
+                parse_mode=ParseMode.MARKDOWN
+            )
+        elif user_message == "🤖 AI Chat":
+            await update.message.reply_text(
+                "🤖 *AI Chat*\n\n"
+                "I'm here to chat! Try asking me:\n"
+                "• How are you?\n"
+                "• Tell me a joke\n"
+                "• What can you do?\n"
+                "• Play a game with me",
+                parse_mode=ParseMode.MARKDOWN
+            )
+        elif user_message == "📞 Support":
+            await update.message.reply_text(
+                "📞 *Support*\n\n"
+                "Need help? Contact our support team:\n"
+                "• Email: support@playpal.com\n"
+                "• Telegram: @admin\n"
+                "• Group: https://t.me/PlayPalGroup\n\n"
+                "We're here to help! 💖",
+                parse_mode=ParseMode.MARKDOWN
+            )
+        elif user_message == "🎯 Quiz":
+            await cmd_quiz(update, context)
+        elif user_message == "🎰 Slots":
+            await update.message.reply_text("Use /slots <amount> to play slot machine!")
+        elif user_message == "📰 Daily Fact":
+            await cmd_fact(update, context)
+        elif user_message == "💬 Quote":
+            await cmd_quote(update, context)
+        elif user_message == "😂 Meme":
+            await cmd_meme(update, context)
+        elif user_message == "⬅️ Back":
+            await update.message.reply_text("Back to main menu:", reply_markup=main_menu_kb())
         else:
-            await update.message.reply_text("I heard you! Try /help to see what I can do!")
-            
+            # AI-like responses
+            if any(word in user_message.lower() for word in ["hello", "hi", "hey", "hola"]):
+                await update.message.reply_text(f"👋 Hello {user.first_name}! How can I help you today?")
+            elif any(word in user_message.lower() for word in ["how are you", "how you doing"]):
+                await update.message.reply_text("I'm doing great! Ready to play some games? 🎮")
+            elif any(word in user_message.lower() for word in ["thank", "thanks", "thank you"]):
+                await update.message.reply_text("You're welcome! 😊")
+            elif any(word in user_message.lower() for word in ["joke", "funny"]):
+                await update.message.reply_text("Why don't scientists trust atoms? Because they make up everything! 😂")
+            elif any(word in user_message.lower() for word in ["what can you do", "features"]):
+                await cmd_help(update, context)
+            else:
+                await update.message.reply_text("I'm here to chat and play games with you! Use the menu below to get started. 👇", reply_markup=main_menu_kb())
+
 async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE):
     print(f"Error: {context.error}")
-    if update and hasattr(update, 'effective_chat'):
-        try:
+    try:
+        if update and hasattr(update, 'effective_chat'):
             await context.bot.send_message(
                 chat_id=update.effective_chat.id,
                 text="Sorry, I encountered an error. Please try again later."
             )
-        except:
-            pass
+    except:
+        pass
 
-# ================== Bot Setup ==================
+# ================== BOT SETUP ==================
 def main():
     # Create the Application
     application = ApplicationBuilder().token(BOT_TOKEN).build()
@@ -575,21 +569,23 @@ def main():
     # Add handlers
     application.add_handler(CommandHandler("start", cmd_start))
     application.add_handler(CommandHandler("help", cmd_help))
+    application.add_handler(CommandHandler("profile", cmd_profile))
+    application.add_handler(CommandHandler("quiz", cmd_quiz))
+    application.add_handler(CommandHandler("slots", cmd_slots))
+    application.add_handler(CommandHandler("fact", cmd_fact))
+    application.add_handler(CommandHandler("quote", cmd_quote))
+    application.add_handler(CommandHandler("meme", cmd_meme))
+    application.add_handler(CommandHandler("coins", cmd_coins))
     application.add_handler(CommandHandler("admin", cmd_admin))
-    application.add_handler(CommandHandler("broadcast", cmd_broadcast))
     application.add_handler(CommandHandler("stats", cmd_stats))
-    application.add_handler(CommandHandler("contact", cmd_contact))
-    application.add_handler(CommandHandler("id", cmd_id))
-    application.add_handler(CommandHandler("joke", cmd_joke))
-    application.add_handler(CallbackQueryHandler(button_handler))
-    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, message_handler))
-    application.add_handler(CommandHandler("setpremium", cmd_setpremium))
-    application.add_handler(CommandHandler("premiumusers", cmd_premiumusers))
-    application.add_handler(CommandHandler("givepremium", cmd_givepremium))
+    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
     application.add_error_handler(error_handler)
 
-    print("🤖 Starting PlayPal bot...")
+    print("🤖 Starting PlayPal Ultimate Bot...")
     print(f"✅ Admin IDs: {ADMIN_IDS}")
+    print("🎮 Games: Quiz, Slots, Dice")
+    print("😂 Content: Memes, Facts, Quotes")
+    print("💰 Economy: Coins, XP, Levels")
     print("✅ Bot is ready and waiting for messages...")
     
     # Start polling
