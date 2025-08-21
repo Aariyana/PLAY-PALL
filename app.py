@@ -262,6 +262,7 @@ def social_menu_kb():
         ["🎉 Share Bot", "⬅️ Back"]
     ], resize_keyboard=True)
 
+
 # ================== QUIZ ANSWER HANDLER ==================
 async def handle_quiz_answer(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle quiz answers from users"""
@@ -388,7 +389,6 @@ async def handle_quiz_answer(update: Update, context: ContextTypes.DEFAULT_TYPE)
         parse_mode=ParseMode.MARKDOWN
     )
 
-
 # ================== REFERRAL SYSTEM ==================
 async def cmd_refer(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Generate referral link and show referral info"""
@@ -448,6 +448,7 @@ async def handle_referral_start(update: Update, context: ContextTypes.DEFAULT_TY
             pass
     
     return False
+
 
 # ================== SURPRISE FEATURE ==================
 async def cmd_surprise(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -628,7 +629,7 @@ async def cmd_help(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "• /setpremium - Manage premium status\n\n"
         )
     
-   help_text += "Use the keyboard menu for easy navigation! 🎯"
+    help_text += "Use the keyboard menu for easy navigation! 🎯"
     
     await update.message.reply_text(help_text, parse_mode=ParseMode.MARKDOWN)
 
@@ -760,6 +761,7 @@ async def handle_admin_mention(update: Update, context: ContextTypes.DEFAULT_TYP
         return True
     
     return False
+
 
 # ================== MESSAGE HANDLERS ==================
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
