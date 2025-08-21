@@ -655,7 +655,10 @@ async def err_handler(update: object, context: ContextTypes.DEFAULT_TYPE):
     print("Error:", context.error)
 
 # ================== Bot bootstrap (Polling) ==================
+import asyncio
+
 def run_bot():
+    asyncio.run(application.run_polling())
     application = ApplicationBuilder().token(BOT_TOKEN).build()
 
     # core / navigation
