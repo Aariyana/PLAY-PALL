@@ -387,7 +387,6 @@ async def cmd_slots(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except ValueError:
         await update.message.reply_text("Please enter a valid number for your bet!")
 
-
 # ================== CONTENT COMMANDS ==================
 async def cmd_fact(update: Update, context: ContextTypes.DEFAULT_TYPE):
     fact = await content_system.get_daily_fact()
@@ -417,6 +416,7 @@ async def cmd_surprise(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(f"🎁 *Surprise Joke!* 🎁\n\n{surprise['content']}")
     elif surprise["type"] == "tip":
         await update.message.reply_text(f"🎁 *Surprise Tip!* 🎁\n\n{surprise['content']}")
+
 
 # ================== ECONOMY COMMANDS ==================
 async def cmd_coins(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -674,7 +674,6 @@ async def cmd_profile(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     await update.message.reply_text(profile_text, parse_mode=ParseMode.MARKDOWN)
 
-
 # ================== CONTACT ADMIN SYSTEM ==================
 async def cmd_contact(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle contact admin requests"""
@@ -778,6 +777,7 @@ async def handle_admin_mention(update: Update, context: ContextTypes.DEFAULT_TYP
         return True
     
     return False
+
 
 # ================== MESSAGE HANDLERS ==================
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -959,12 +959,14 @@ def main():
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
     application.add_error_handler(error_handler)
 
-    # Start quiz cleanup task after the application is running
-    application.job_queue.run_repeating(
-        lambda context: asyncio.create_task(cleanup_old_quizzes()),
-        interval=300,  # Run every 5 minutes
-        first=10  # Start after 10 seconds
-    )
+    # Start quiz cleanup task in a separate thread
+    def start_cleanup_task():
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        loop.run_until_complete(cleanup_old_quizzes())
+    
+    cleanup_thread = threading.Thread(target=start_cleanup_task, daemon=True)
+    cleanup_thread.start()
 
     print("🤖 Starting PlayPal Ultimate Bot...")
     print(f"✅ Admin IDs: {ADMIN_IDS}")
